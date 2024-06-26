@@ -9,8 +9,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"crypto/tls"
 
 	"github.com/montanaflynn/stats"
+	"golang.org/x/exp/slog"
 )
 
 type Elastic struct {
@@ -25,6 +27,7 @@ func basicAuth(username, password string) string {
 }
 
 func (e *Elastic) runRequest(method string, url string, target interface{}, payload []byte) error {
+	http.DefaultTransport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	req, err := http.NewRequest(method, url, bytes.NewBuffer(payload))
 	if err != nil {
 		panic(err)
@@ -95,12 +98,14 @@ type rerouteResponse struct {
 
 func findNodeByName(nodes []node, nodeName string) node {
 	var result node
-	for i := 1; i < len(nodes); i++ {
+	for i := 0; i < len(nodes); i++ {
 		if nodes[i].Name == nodeName {
 			result = nodes[i]
 			break
 		}
 	}
+
+	slog.Debug(fmt.Sprintf("Looking for node %s / found %s", nodeName, result))
 
 	return result
 }
@@ -148,6 +153,9 @@ func (e Elastic) GetDiskSpaceInfo(url string, allowedPercentOfDifference int, fr
 	} else {
 		nodeWithMaxUsage = findNodeByName(dataNodes, fromNode)
 	}
+
+	slog.Debug(fmt.Sprintf("nodeWithMinUsage-> %s", nodeWithMinUsage))
+	slog.Debug(fmt.Sprintf("nodeWithMaxUsage-> %s", nodeWithMaxUsage))
 
 	// preparing data for stats package
 	data := []float64{}
@@ -204,6 +212,7 @@ func (e Elastic) GetShardsInfo(url string, diskSpaceInfo rebalanceInfo, shardsTo
 	// from/largest shards
 	shardsInfo := shardsInfoResponse{}
 	var payload []byte
+
 	err := e.runRequest("GET", fmt.Sprintf("%s/_cat/shards?format=json&bytes=b", url), &shardsInfo, payload)
 	if err != nil {
 		panic(err)
@@ -211,7 +220,12 @@ func (e Elastic) GetShardsInfo(url string, diskSpaceInfo rebalanceInfo, shardsTo
 
 	// shards on source
 	var shardsOnSource []shard
+	slog.Debug(fmt.Sprintf("Length %d", len(shardsInfo)))
+
 	for i := 0; i < len(shardsInfo); i++ {
+		slog.Debug(fmt.Sprintf("Shard info -> %s", shardsInfo[i]))
+		slog.Debug(fmt.Sprintf("Largest -> %s", diskSpaceInfo))
+
 		if shardsInfo[i].Node == diskSpaceInfo.Largest.Name {
 			shardsOnSource = append(shardsOnSource, shardsInfo[i])
 		}
@@ -246,6 +260,9 @@ func (e Elastic) GetShardsInfo(url string, diskSpaceInfo rebalanceInfo, shardsTo
 		return shardsAvailableForMove[i].Store > shardsAvailableForMove[j].Store
 	})
 
+	for _, value := range shardsAvailableForMove {
+	  slog.Debug(fmt.Sprintf("shardsAvailableForMove = %s", value))
+  }
 	// finding N largest shards
 	shardsAvailableForMove = shardsAvailableForMove[:shardsToMove]
 
